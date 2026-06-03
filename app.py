@@ -7,7 +7,7 @@ load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-conversation_history = []
+conversation_store = {}
 
 app = Flask(__name__)
 
@@ -18,15 +18,22 @@ def home():
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
-        user_input = request.get_json()
-        conversation_history.append({"role": "user", "content": user_input["input"]})
+        data = request.get_json()
+
+        session_id = data["session_id"]
+        user_input = data["input"]
+
+        if session_id not in conversation_store:
+            conversation_store[session_id] = []
+        
+        conversation_store[session_id].append({ "role": "user", "content": user_input})
 
         response = client.responses.create(
             model="gpt-4o-mini",
-            input=conversation_history
+            input=conversation_store[session_id],
         )
 
-        conversation_history.append({
+        conversation_store[session_id].append({
             "role": "assistant",
             "content": response.output_text
         })
@@ -34,7 +41,7 @@ def ask():
         return jsonify({
             "role": "assistant",
             "response": response.output_text,
-            "history": conversation_history
+            "history": conversation_store[session_id]
         })
 
     except AuthenticationError as e:
