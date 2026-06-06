@@ -6,6 +6,8 @@ import org.springframework.test.context.TestPropertySource;
 
 @SpringBootTest
 @TestPropertySource(properties = {
+    "spring.datasource.url=jdbc:sqlite::memory:",
+    "spring.jpa.hibernate.ddl-auto=create-drop",
     "OPENAI_API_KEY=test-key-placeholder"
 })
 class FlaskOpenaiApiApplicationTests {
