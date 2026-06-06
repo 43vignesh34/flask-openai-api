@@ -34,6 +34,7 @@ public class ConversationService {
     private final RestClient restClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, List<Message>> conversationStore = new ConcurrentHashMap<>();
+    private String systemPrompt = "";
 
     public ConversationService(@Value("${OPENAI_API_KEY:}") String apiKey) {
         this.restClient = RestClient.builder()
@@ -41,6 +42,17 @@ public class ConversationService {
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .build();
+        
+        // Load the system prompt from the classpath
+        try (InputStream is = getClass().getResourceAsStream("/system_prompt.txt")) {
+            if (is != null) {
+                this.systemPrompt = new String(is.readAllBytes(), StandardCharsets.UTF_8).trim();
+            } else {
+                System.err.println("system_prompt.txt resource not found!");
+            }
+        } catch (Exception e) {
+            System.err.println("Error reading system_prompt.txt: " + e.getMessage());
+        }
     }
 
     public List<Message> getHistory(String sessionId) {
@@ -55,10 +67,13 @@ public class ConversationService {
         history.add(new Message("user", userInput));
 
         try {
-            // 3. Prepare payload (copy history to avoid concurrent modification issues during serialization)
-            List<Message> messagesCopy;
+            // 3. Prepare payload (prepend system prompt if configured)
+            List<Message> messagesCopy = new ArrayList<>();
+            if (systemPrompt != null && !systemPrompt.isEmpty()) {
+                messagesCopy.add(new Message("system", systemPrompt));
+            }
             synchronized (history) {
-                messagesCopy = new ArrayList<>(history);
+                messagesCopy.addAll(history);
             }
             OpenApiRequest requestPayload = new OpenApiRequest("gpt-4o-mini", messagesCopy);
 
@@ -103,10 +118,13 @@ public class ConversationService {
         List<Message> history = conversationStore.computeIfAbsent(sessionId, k -> Collections.synchronizedList(new ArrayList<>()));
         history.add(new Message("user", userInput));
 
-        // 2. Copy history
-        List<Message> messagesCopy;
+        // 2. Prepare payload (prepend system prompt if configured)
+        List<Message> messagesCopy = new ArrayList<>();
+        if (systemPrompt != null && !systemPrompt.isEmpty()) {
+            messagesCopy.add(new Message("system", systemPrompt));
+        }
         synchronized (history) {
-            messagesCopy = new ArrayList<>(history);
+            messagesCopy.addAll(history);
         }
 
         // 3. Prepare payload with stream=true
