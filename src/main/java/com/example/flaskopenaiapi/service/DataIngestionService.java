@@ -45,7 +45,9 @@ public class DataIngestionService {
     @Autowired
     private VectorStoreService vectorStoreService;
 
-    @PostConstruct
+    // @PostConstruct disabled — live retrieval replaces startup data population.
+    // Call ingestAll() manually via the /ingest endpoint if needed.
+    // @PostConstruct
     public void init() {
         try {
             Files.createDirectories(Paths.get(DATA_DIR));
@@ -70,7 +72,8 @@ public class DataIngestionService {
      * Permanent scheduler: runs the ingestion pipeline once every 24 hours.
      * Rebuilds the vector index after updating the database.
      */
-    @Scheduled(cron = "0 0 0 * * ?") // Runs daily at midnight
+    // @Scheduled disabled — no background ingestion jobs needed in live retrieval mode.
+    // @Scheduled(cron = "0 0 0 * * ?")
     public void scheduledIngestion() {
         System.out.println("Triggering scheduled data ingestion...");
         ingestAll();

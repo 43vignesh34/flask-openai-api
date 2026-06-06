@@ -9,6 +9,7 @@ import com.example.flaskopenaiapi.model.OpenApiResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -28,9 +29,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import com.example.flaskopenaiapi.repository.PlayerRepository;
-
 @Service
 public class ConversationService {
 
@@ -38,19 +36,17 @@ public class ConversationService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, List<Message>> conversationStore = new ConcurrentHashMap<>();
     private String systemPrompt = "";
-    private final VectorStoreService vectorStoreService;
 
     @Autowired
-    private PlayerRepository playerRepository;
+    private LiveDataFetcherService liveDataFetcher;
 
-    public ConversationService(@Value("${OPENAI_API_KEY:}") String apiKey, VectorStoreService vectorStoreService) {
-        this.vectorStoreService = vectorStoreService;
+    public ConversationService(@Value("${OPENAI_API_KEY:}") String apiKey) {
         this.restClient = RestClient.builder()
                 .baseUrl("https://api.openai.com/v1")
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .build();
-        
+
         // Load the system prompt from the classpath
         try (InputStream is = getClass().getResourceAsStream("/system_prompt.txt")) {
             if (is != null) {
@@ -68,47 +64,31 @@ public class ConversationService {
     }
 
     public OpenApiResponse ask(String sessionId, String userInput) {
-        // 1. Get or create history for session
-        List<Message> history = conversationStore.computeIfAbsent(sessionId, k -> Collections.synchronizedList(new ArrayList<>()));
-
-        // 2. Append user input
+        List<Message> history = conversationStore.computeIfAbsent(
+                sessionId, k -> Collections.synchronizedList(new ArrayList<>()));
         history.add(new Message("user", userInput));
 
         try {
-            // 3. Prepare payload (prepend system prompt and RAG context if available)
             List<Message> messagesCopy = new ArrayList<>();
+
+            // 1. System prompt
             if (systemPrompt != null && !systemPrompt.isEmpty()) {
                 messagesCopy.add(new Message("system", systemPrompt));
             }
 
-            boolean dbIncomplete = (playerRepository == null || playerRepository.count() == 0);
-            if (dbIncomplete) {
-                String warning = "[CRITICAL: KNOWLEDGE BASE INCOMPLETE]\n" +
-                        "The verified database containing current IPL squads, player stats, and match results is currently empty or unavailable. " +
-                        "You must immediately and clearly state to the user: \"The IPL knowledge base is currently incomplete. Current data is unavailable.\" " +
-                        "Do not answer the question using your general model memory.";
-                messagesCopy.add(new Message("system", warning));
-            } else {
-                // Search vector store for relevant context based on user query
-                List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
-                if (!contextChunks.isEmpty()) {
-                    StringBuilder contextBuilder = new StringBuilder();
-                    contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
-                    contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
-                    for (VectorStoreService.ChunkScore cs : contextChunks) {
-                        contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
-                        contextBuilder.append(cs.getChunk().getText()).append("\n\n");
-                    }
-                    messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
-                }
+            // 2. Live data context (fetched now, discarded after use)
+            String liveContext = fetchLiveContext(userInput);
+            if (liveContext != null && !liveContext.isBlank()) {
+                messagesCopy.add(new Message("system", liveContext));
             }
 
+            // 3. Conversation history
             synchronized (history) {
                 messagesCopy.addAll(history);
             }
+
             OpenApiRequest requestPayload = new OpenApiRequest("gpt-4o-mini", messagesCopy);
 
-            // 4. Send request to /responses
             OpenApiResponse response = restClient.post()
                     .uri("/responses")
                     .body(requestPayload)
@@ -119,19 +99,14 @@ public class ConversationService {
                         try (InputStream is = resp.getBody()) {
                             body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
                         } catch (Exception ignored) {}
-                        
-                        if (code == 401) {
-                            throw new AuthenticationException("OpenAI API Authentication failed.");
-                        } else if (code == 429) {
-                            throw new RateLimitException("OpenAI API Rate limit / Quota exceeded.");
-                        } else {
-                            throw new ApiStatusException(code, body);
-                        }
+
+                        if (code == 401) throw new AuthenticationException("OpenAI API Authentication failed.");
+                        else if (code == 429) throw new RateLimitException("OpenAI API Rate limit / Quota exceeded.");
+                        else throw new ApiStatusException(code, body);
                     })
                     .body(OpenApiResponse.class);
 
             if (response != null && response.getOutputText() != null) {
-                // 5. Append assistant reply to history
                 history.add(new Message("assistant", response.getOutputText()));
             }
 
@@ -145,49 +120,34 @@ public class ConversationService {
     }
 
     public void askStream(String sessionId, String userInput, SseEmitter emitter) {
-        // 1. Get or create history
-        List<Message> history = conversationStore.computeIfAbsent(sessionId, k -> Collections.synchronizedList(new ArrayList<>()));
+        List<Message> history = conversationStore.computeIfAbsent(
+                sessionId, k -> Collections.synchronizedList(new ArrayList<>()));
         history.add(new Message("user", userInput));
 
-        // 2. Prepare payload (prepend system prompt and RAG context if available)
+        // 1. System prompt
         List<Message> messagesCopy = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isEmpty()) {
             messagesCopy.add(new Message("system", systemPrompt));
         }
 
-        boolean dbIncomplete = (playerRepository == null || playerRepository.count() == 0);
-        if (dbIncomplete) {
-            String warning = "[CRITICAL: KNOWLEDGE BASE INCOMPLETE]\n" +
-                    "The verified database containing current IPL squads, player stats, and match results is currently empty or unavailable. " +
-                    "You must immediately and clearly state to the user: \"The IPL knowledge base is currently incomplete. Current data is unavailable.\" " +
-                    "Do not answer the question using your general model memory.";
-            messagesCopy.add(new Message("system", warning));
-        } else {
-            // Search vector store for relevant context based on user query
-            List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
-            if (!contextChunks.isEmpty()) {
-                StringBuilder contextBuilder = new StringBuilder();
-                contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
-                contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
-                for (VectorStoreService.ChunkScore cs : contextChunks) {
-                    contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
-                    contextBuilder.append(cs.getChunk().getText()).append("\n\n");
-                }
-                messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
-            }
+        // 2. Live data context — fetched synchronously before streaming starts
+        String liveContext = fetchLiveContext(userInput);
+        if (liveContext != null && !liveContext.isBlank()) {
+            messagesCopy.add(new Message("system", liveContext));
         }
 
+        // 3. Conversation history
         synchronized (history) {
             messagesCopy.addAll(history);
         }
 
-        // 3. Prepare payload with stream=true
+        // 4. Stream request payload
         Map<String, Object> requestPayload = new HashMap<>();
         requestPayload.put("model", "gpt-4o-mini");
         requestPayload.put("input", messagesCopy);
         requestPayload.put("stream", true);
 
-        // 4. Asynchronously call OpenAI API and stream response
+        // 5. Async streaming call to OpenAI
         CompletableFuture.runAsync(() -> {
             StringBuilder fullText = new StringBuilder();
             try {
@@ -205,7 +165,8 @@ public class ConversationService {
                                 throw new ApiStatusException(code, errorBody);
                             }
 
-                            try (BufferedReader reader = new BufferedReader(new InputStreamReader(resp.getBody(), StandardCharsets.UTF_8))) {
+                            try (BufferedReader reader = new BufferedReader(
+                                    new InputStreamReader(resp.getBody(), StandardCharsets.UTF_8))) {
                                 String line;
                                 while ((line = reader.readLine()) != null) {
                                     if (line.startsWith("data: ")) {
@@ -225,27 +186,46 @@ public class ConversationService {
                             return null;
                         });
 
-                // 5. Append accumulated assistant response to history
+                // Save full assistant response to history
                 if (fullText.length() > 0) {
                     history.add(new Message("assistant", fullText.toString()));
                 }
 
-                // 6. Signal done and complete
                 emitter.send(SseEmitter.event().name("done").data(""));
                 emitter.complete();
 
             } catch (ApiStatusException e) {
-                try {
-                    emitter.send(SseEmitter.event().name("error").data(e.getResponseBody()));
-                } catch (Exception ignored) {}
+                try { emitter.send(SseEmitter.event().name("error").data(e.getResponseBody())); }
+                catch (Exception ignored) {}
                 emitter.completeWithError(e);
             } catch (Exception e) {
-                try {
-                    emitter.send(SseEmitter.event().name("error").data(e.getMessage()));
-                } catch (Exception ignored) {}
+                try { emitter.send(SseEmitter.event().name("error").data(e.getMessage())); }
+                catch (Exception ignored) {}
                 emitter.completeWithError(e);
             }
         });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Live context helper
+    // ─────────────────────────────────────────────────────────────
+
+    private String fetchLiveContext(String userInput) {
+        try {
+            System.out.println("Fetching live IPL context for query: " + userInput.substring(0, Math.min(80, userInput.length())));
+            String ctx = liveDataFetcher.buildLiveContext(userInput);
+            if (ctx != null) {
+                System.out.println("Live context fetched (" + ctx.length() + " chars).");
+            } else {
+                System.out.println("No live context needed (pure strategy query).");
+            }
+            return ctx;
+        } catch (Exception e) {
+            System.err.println("fetchLiveContext failed: " + e.getMessage());
+            return "[LIVE RETRIEVAL FAILED]\n"
+                 + "An unexpected error occurred fetching live IPL data: " + e.getMessage() + "\n"
+                 + "Do NOT answer current IPL facts from model memory. Inform the user live data is unavailable.\n";
+        }
     }
 
     private String extractDelta(String json) {

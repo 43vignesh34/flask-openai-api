@@ -6,7 +6,6 @@ import static org.mockito.Mockito.*;
 import com.example.flaskopenaiapi.model.Message;
 import com.example.flaskopenaiapi.model.OpenApiRequest;
 import com.example.flaskopenaiapi.model.OpenApiResponse;
-import com.example.flaskopenaiapi.repository.PlayerRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,10 +21,7 @@ import java.util.Collections;
 public class ConversationServiceTest {
 
     @Mock
-    private PlayerRepository playerRepository;
-
-    @Mock
-    private VectorStoreService vectorStoreService;
+    private LiveDataFetcherService liveDataFetcher;
 
     @Mock
     private RestClient restClient;
@@ -34,15 +30,17 @@ public class ConversationServiceTest {
 
     @BeforeEach
     void setUp() {
-        conversationService = new ConversationService("", vectorStoreService);
-        ReflectionTestUtils.setField(conversationService, "playerRepository", playerRepository);
+        conversationService = new ConversationService("");
+        ReflectionTestUtils.setField(conversationService, "liveDataFetcher", liveDataFetcher);
         ReflectionTestUtils.setField(conversationService, "restClient", restClient);
     }
 
     @Test
-    void testAsk_WhenDbIsEmpty_ShouldInjectIncompleteWarning() {
+    void testAsk_WhenLiveRetrievalFails_ShouldInjectFailureContext() {
         // Arrange
-        when(playerRepository.count()).thenReturn(0L);
+        String failureContext = "[LIVE RETRIEVAL FAILED]\nCould not fetch live IPL data for: SQUAD at 2026-06-06 13:00 IST.\n"
+                + "Do NOT answer current IPL facts from model memory.";
+        when(liveDataFetcher.buildLiveContext(anyString())).thenReturn(failureContext);
 
         RestClient.RequestBodyUriSpec requestBodyUriSpec = mock(RestClient.RequestBodyUriSpec.class);
         RestClient.RequestBodySpec requestBodySpec = mock(RestClient.RequestBodySpec.class);
@@ -53,51 +51,39 @@ public class ConversationServiceTest {
         when(requestBodySpec.body(any(OpenApiRequest.class))).thenReturn(requestBodySpec);
         when(requestBodySpec.retrieve()).thenReturn(responseSpec);
         when(responseSpec.onStatus(any(), any())).thenReturn(responseSpec);
-        
+
         OpenApiResponse expectedResponse = new OpenApiResponse();
         OpenApiResponse.OutputItem item = new OpenApiResponse.OutputItem();
         OpenApiResponse.ContentBlock cb = new OpenApiResponse.ContentBlock();
         cb.setType("output_text");
-        cb.setText("The IPL knowledge base is currently incomplete.");
+        cb.setText("I wasn't able to fetch the latest IPL data right now.");
         item.setContent(Collections.singletonList(cb));
         expectedResponse.setOutput(Collections.singletonList(item));
-        
         when(responseSpec.body(OpenApiResponse.class)).thenReturn(expectedResponse);
 
         // Act
-        OpenApiResponse actualResponse = conversationService.ask("session-123", "Analyze KKR squad");
+        OpenApiResponse actualResponse = conversationService.ask("session-1", "What is the current KKR squad?");
 
         // Assert
         assertNotNull(actualResponse);
-        assertEquals("The IPL knowledge base is currently incomplete.", actualResponse.getOutputText());
+        assertEquals("I wasn't able to fetch the latest IPL data right now.", actualResponse.getOutputText());
 
         ArgumentCaptor<OpenApiRequest> captor = ArgumentCaptor.forClass(OpenApiRequest.class);
         verify(requestBodySpec).body(captor.capture());
         OpenApiRequest request = captor.getValue();
         assertNotNull(request);
 
-        // Verify system warning is injected
-        boolean warningFound = false;
-        for (Message msg : request.getInput()) {
-            if ("system".equals(msg.getRole()) && msg.getContent().contains("[CRITICAL: KNOWLEDGE BASE INCOMPLETE]")) {
-                warningFound = true;
-                break;
-            }
-        }
-        assertTrue(warningFound, "Should contain the knowledge base incomplete critical system message");
+        // Verify failure context was injected into the request
+        boolean failureContextFound = request.getInput().stream()
+                .anyMatch(msg -> "system".equals(msg.getRole())
+                        && msg.getContent().contains("[LIVE RETRIEVAL FAILED]"));
+        assertTrue(failureContextFound, "Request should contain [LIVE RETRIEVAL FAILED] system message");
     }
 
     @Test
-    void testAsk_WhenDbHasData_ShouldRetrieveContextFromVectorStore() {
-        // Arrange
-        when(playerRepository.count()).thenReturn(10L);
-
-        VectorStoreService.Chunk chunk = new VectorStoreService.Chunk();
-        chunk.setText("Rishabh Pant - 27 Cr");
-        chunk.setSource("Database: players table");
-        VectorStoreService.ChunkScore chunkScore = new VectorStoreService.ChunkScore(chunk, 0.85);
-
-        when(vectorStoreService.search(anyString(), anyInt())).thenReturn(Collections.singletonList(chunkScore));
+    void testAsk_WhenPureStrategyQuery_NoLiveContextInjected() {
+        // Arrange — pure strategy query returns null from live fetcher
+        when(liveDataFetcher.buildLiveContext(anyString())).thenReturn(null);
 
         RestClient.RequestBodyUriSpec requestBodyUriSpec = mock(RestClient.RequestBodyUriSpec.class);
         RestClient.RequestBodySpec requestBodySpec = mock(RestClient.RequestBodySpec.class);
@@ -113,38 +99,72 @@ public class ConversationServiceTest {
         OpenApiResponse.OutputItem item = new OpenApiResponse.OutputItem();
         OpenApiResponse.ContentBlock cb = new OpenApiResponse.ContentBlock();
         cb.setType("output_text");
-        cb.setText("Rishabh Pant is the captain of LSG.");
+        cb.setText("A good death bowler needs to be able to hit yorkers consistently.");
         item.setContent(Collections.singletonList(cb));
         expectedResponse.setOutput(Collections.singletonList(item));
-        
         when(responseSpec.body(OpenApiResponse.class)).thenReturn(expectedResponse);
 
         // Act
-        OpenApiResponse actualResponse = conversationService.ask("session-123", "Who is LSG captain?");
+        OpenApiResponse actualResponse = conversationService.ask("session-2", "What makes a good death bowler?");
 
         // Assert
         assertNotNull(actualResponse);
-        assertEquals("Rishabh Pant is the captain of LSG.", actualResponse.getOutputText());
 
         ArgumentCaptor<OpenApiRequest> captor = ArgumentCaptor.forClass(OpenApiRequest.class);
         verify(requestBodySpec).body(captor.capture());
         OpenApiRequest request = captor.getValue();
-        assertNotNull(request);
 
-        // Verify factual context is injected instead of warning
-        boolean warningFound = false;
-        boolean contextFound = false;
-        for (Message msg : request.getInput()) {
-            if ("system".equals(msg.getRole())) {
-                if (msg.getContent().contains("[CRITICAL: KNOWLEDGE BASE INCOMPLETE]")) {
-                    warningFound = true;
-                }
-                if (msg.getContent().contains("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]")) {
-                    contextFound = true;
-                }
-            }
-        }
-        assertFalse(warningFound, "Should not contain the warning message");
-        assertTrue(contextFound, "Should contain the factual context from VectorStore");
+        // No LIVE DATA CONTEXT injection for pure strategy query.
+        // The live fetcher returned null → no extra system message should appear beyond the static system_prompt.txt.
+        // We distinguish by checking for the timestamp header "fetched at" which only appears in live injections.
+        boolean hasLiveContextInjection = request.getInput().stream()
+                .anyMatch(msg -> "system".equals(msg.getRole())
+                        && msg.getContent().contains("fetched at")
+                        && msg.getContent().contains("[LIVE DATA CONTEXT"));
+        assertFalse(hasLiveContextInjection, "Pure strategy query should NOT inject live fetched context system message");
+    }
+
+    @Test
+    void testAsk_WhenLiveContextSucceeds_ShouldInjectDataIntoRequest() {
+        // Arrange
+        String liveCtx = "[LIVE DATA CONTEXT — fetched at 2026-06-06 13:00 IST]\n"
+                + "=== SOURCE: Cricbuzz | IPL Points Table | FETCHED: 2026-06-06 13:00 IST ===\n"
+                + "1. Royal Challengers Bengaluru | P:14 W:9 L:5 Pts:18\n"
+                + "2. Gujarat Titans | P:14 W:8 L:6 Pts:16";
+        when(liveDataFetcher.buildLiveContext(anyString())).thenReturn(liveCtx);
+
+        RestClient.RequestBodyUriSpec requestBodyUriSpec = mock(RestClient.RequestBodyUriSpec.class);
+        RestClient.RequestBodySpec requestBodySpec = mock(RestClient.RequestBodySpec.class);
+        RestClient.ResponseSpec responseSpec = mock(RestClient.ResponseSpec.class);
+
+        when(restClient.post()).thenReturn(requestBodyUriSpec);
+        when(requestBodyUriSpec.uri(anyString())).thenReturn(requestBodySpec);
+        when(requestBodySpec.body(any(OpenApiRequest.class))).thenReturn(requestBodySpec);
+        when(requestBodySpec.retrieve()).thenReturn(responseSpec);
+        when(responseSpec.onStatus(any(), any())).thenReturn(responseSpec);
+
+        OpenApiResponse expectedResponse = new OpenApiResponse();
+        OpenApiResponse.OutputItem item = new OpenApiResponse.OutputItem();
+        OpenApiResponse.ContentBlock cb = new OpenApiResponse.ContentBlock();
+        cb.setType("output_text");
+        cb.setText("According to Cricbuzz, RCB leads the table with 18 points.");
+        item.setContent(Collections.singletonList(cb));
+        expectedResponse.setOutput(Collections.singletonList(item));
+        when(responseSpec.body(OpenApiResponse.class)).thenReturn(expectedResponse);
+
+        // Act
+        OpenApiResponse actualResponse = conversationService.ask("session-3", "Who is leading the points table?");
+
+        // Assert
+        assertNotNull(actualResponse);
+
+        ArgumentCaptor<OpenApiRequest> captor = ArgumentCaptor.forClass(OpenApiRequest.class);
+        verify(requestBodySpec).body(captor.capture());
+        OpenApiRequest request = captor.getValue();
+
+        boolean hasLiveContext = request.getInput().stream()
+                .anyMatch(msg -> "system".equals(msg.getRole())
+                        && msg.getContent().contains("[LIVE DATA CONTEXT"));
+        assertTrue(hasLiveContext, "Request should contain live data context from Cricbuzz");
     }
 }

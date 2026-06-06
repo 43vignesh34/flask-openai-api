@@ -47,7 +47,9 @@ public class VectorStoreService {
                 .build();
     }
 
-    @PostConstruct
+    // @PostConstruct disabled — vector store no longer auto-loads in live retrieval mode.
+    // Kept for future use by the season review RAG feature.
+    // @PostConstruct
     public void init() {
         try {
             loadIndex();
