@@ -21,8 +21,8 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <i data-lucide="bot" class="icon-primary"></i>
-                <h2>Chat Assistant</h2>
+                <i data-lucide="trophy" class="icon-primary"></i>
+                <h2>IPL Strategist</h2>
             </div>
             
             <div class="sidebar-content">
@@ -34,6 +34,17 @@
                             <i data-lucide="plus"></i>
                         </button>
                     </div>
+                </div>
+
+                <div class="session-section" style="margin-top: -10px;">
+                    <h3>IPL RAG Pipeline</h3>
+                    <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4;">
+                        Download recent squads, statistics, and matches to update the strategist's memory.
+                    </p>
+                    <button id="refresh-data-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; border-radius: 8px; border: 1px solid var(--border-glass); background: rgba(255,255,255,0.03); color: var(--text-main); font-weight: 500; font-size: 0.8rem; cursor: pointer; transition: var(--transition-fast);">
+                        <i data-lucide="refresh-cw" id="refresh-icon" style="width: 14px; height: 14px;"></i>
+                        <span id="refresh-btn-text">Ingest & Rebuild Index</span>
+                    </button>
                 </div>
 
                 <div class="history-section">
@@ -73,25 +84,25 @@
                 <!-- Welcome/Introduction Card -->
                 <div class="welcome-card" id="welcome-card">
                     <i data-lucide="sparkles" class="welcome-icon"></i>
-                    <h2>Welcome to AI Assistant!</h2>
-                    <p>Start a conversation by typing a message below or use one of the quick prompts to get started.</p>
+                    <h2>IPL Auction Strategist</h2>
+                    <p>Get data-driven franchise recommendations, player valuations, squad analytics, and matchup plans. Ask any question about squads, player stats, or recent match results.</p>
                     
                     <div class="suggestion-grid">
-                        <button class="suggestion-chip" data-prompt="What is Java Spring Boot?">
+                        <button class="suggestion-chip" data-prompt="Analyze the strengths and weaknesses of Chennai Super Kings (CSK).">
                             <i data-lucide="help-circle"></i>
-                            <span>What is Spring Boot?</span>
+                            <span>CSK Squad Analysis</span>
                         </button>
-                        <button class="suggestion-chip" data-prompt="Write a Python function to check for prime numbers.">
-                            <i data-lucide="code-2"></i>
-                            <span>Code a Prime checker</span>
+                        <button class="suggestion-chip" data-prompt="Recommend top auction targets for Mumbai Indians to strengthen their death bowling.">
+                            <i data-lucide="target"></i>
+                            <span>MI Death Bowling Targets</span>
                         </button>
-                        <button class="suggestion-chip" data-prompt="Write a short poem about coding at night.">
-                            <i data-lucide="pen-tool"></i>
-                            <span>Write a coding poem</span>
+                        <button class="suggestion-chip" data-prompt="Explain the Impact Player rule and how it affects team construction.">
+                            <i data-lucide="info"></i>
+                            <span>Explain Impact Player Rule</span>
                         </button>
-                        <button class="suggestion-chip" data-prompt="How do I integrate APIs in Java?">
-                            <i data-lucide="network"></i>
-                            <span>Java API integration</span>
+                        <button class="suggestion-chip" data-prompt="Who won the match between Royal Challengers Bengaluru and Chennai Super Kings on March 22, 2024?">
+                            <i data-lucide="calendar"></i>
+                            <span>Recent RCB vs CSK Result</span>
                         </button>
                     </div>
                 </div>

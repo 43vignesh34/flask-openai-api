@@ -33,6 +33,13 @@
             <version>3.0.0</version>
         </dependency>
 
+        <!-- JSoup for HTML scraping/parsing -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.17.2</version>
+        </dependency>
+
         <!-- Spring Boot Test Starter -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

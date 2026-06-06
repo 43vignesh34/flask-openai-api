@@ -35,8 +35,10 @@ public class ConversationService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, List<Message>> conversationStore = new ConcurrentHashMap<>();
     private String systemPrompt = "";
+    private final VectorStoreService vectorStoreService;
 
-    public ConversationService(@Value("${OPENAI_API_KEY:}") String apiKey) {
+    public ConversationService(@Value("${OPENAI_API_KEY:}") String apiKey, VectorStoreService vectorStoreService) {
+        this.vectorStoreService = vectorStoreService;
         this.restClient = RestClient.builder()
                 .baseUrl("https://api.openai.com/v1")
                 .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
@@ -67,11 +69,25 @@ public class ConversationService {
         history.add(new Message("user", userInput));
 
         try {
-            // 3. Prepare payload (prepend system prompt if configured)
+            // 3. Prepare payload (prepend system prompt and RAG context if available)
             List<Message> messagesCopy = new ArrayList<>();
             if (systemPrompt != null && !systemPrompt.isEmpty()) {
                 messagesCopy.add(new Message("system", systemPrompt));
             }
+
+            // Search vector store for relevant context based on user query
+            List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
+            if (!contextChunks.isEmpty()) {
+                StringBuilder contextBuilder = new StringBuilder();
+                contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
+                contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
+                for (VectorStoreService.ChunkScore cs : contextChunks) {
+                    contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
+                    contextBuilder.append(cs.getChunk().getText()).append("\n\n");
+                }
+                messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
+            }
+
             synchronized (history) {
                 messagesCopy.addAll(history);
             }
@@ -118,11 +134,25 @@ public class ConversationService {
         List<Message> history = conversationStore.computeIfAbsent(sessionId, k -> Collections.synchronizedList(new ArrayList<>()));
         history.add(new Message("user", userInput));
 
-        // 2. Prepare payload (prepend system prompt if configured)
+        // 2. Prepare payload (prepend system prompt and RAG context if available)
         List<Message> messagesCopy = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isEmpty()) {
             messagesCopy.add(new Message("system", systemPrompt));
         }
+
+        // Search vector store for relevant context based on user query
+        List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
+        if (!contextChunks.isEmpty()) {
+            StringBuilder contextBuilder = new StringBuilder();
+            contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
+            contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
+            for (VectorStoreService.ChunkScore cs : contextChunks) {
+                contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
+                contextBuilder.append(cs.getChunk().getText()).append("\n\n");
+            }
+            messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
+        }
+
         synchronized (history) {
             messagesCopy.addAll(history);
         }

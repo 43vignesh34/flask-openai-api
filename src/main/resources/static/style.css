@@ -91,6 +91,11 @@ body {
     100% { transform: translateY(40px) scale(1.1); }
 }
 
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 /* App Main Container Grid */
 .app-container {
     position: relative;

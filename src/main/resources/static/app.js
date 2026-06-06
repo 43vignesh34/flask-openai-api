@@ -12,6 +12,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionList = document.getElementById('session-list');
     const clearChatBtn = document.getElementById('clear-chat-btn');
     const toastContainer = document.getElementById('toast-container');
+    const refreshDataBtn = document.getElementById('refresh-data-btn');
+    const refreshIcon = document.getElementById('refresh-icon');
+    const refreshBtnText = document.getElementById('refresh-btn-text');
     
     // Application State
     let currentSessionId = '';
@@ -75,6 +78,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Clear chat view screen
         clearChatBtn.addEventListener('click', clearScreen);
 
+        // Bind RAG refresh button
+        if (refreshDataBtn) {
+            refreshDataBtn.addEventListener('click', handleRefreshData);
+        }
+ 
         // Initialize Lucide Icons
         lucide.createIcons();
     }
@@ -376,6 +384,48 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('API Error:', error);
             showToast('Network error: Could not reach the server.', 'error');
             appendMessageBubble('assistant', '⚠️ Network error: Could not reach the server.');
+        }
+    }
+
+    async function handleRefreshData() {
+        if (!refreshDataBtn) return;
+        
+        refreshDataBtn.disabled = true;
+        refreshDataBtn.style.opacity = '0.7';
+        refreshDataBtn.style.cursor = 'not-allowed';
+        if (refreshIcon) {
+            refreshIcon.style.animation = 'spin 1s linear infinite';
+        }
+        if (refreshBtnText) {
+            refreshBtnText.textContent = 'Ingesting Data...';
+        }
+        
+        showToast('Running IPL data ingestion pipeline...', 'info');
+
+        try {
+            const response = await fetch('/ingest', {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                throw new Error('Server returned ' + response.status);
+            }
+
+            const data = await response.json();
+            showToast(data.message || 'Ingestion completed successfully!', 'success');
+        } catch (error) {
+            console.error('Ingestion Error:', error);
+            showToast('Ingestion failed: ' + error.message, 'error');
+        } finally {
+            refreshDataBtn.disabled = false;
+            refreshDataBtn.style.opacity = '1';
+            refreshDataBtn.style.cursor = 'pointer';
+            if (refreshIcon) {
+                refreshIcon.style.animation = 'none';
+            }
+            if (refreshBtnText) {
+                refreshBtnText.textContent = 'Ingest & Rebuild Index';
+            }
         }
     }
 

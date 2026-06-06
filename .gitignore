@@ -22,4 +22,8 @@ buildNumber.properties
 .project
 .settings/
 bin/
-
+# RAG Data Cache & Scraped Files
+data/embeddings_cache.json
+data/scraped_squads.md
+data/scraped_news.md
+data/cricsheet_recent_matches.md

@@ -6,6 +6,8 @@ import com.example.flaskopenaiapi.exception.RateLimitException;
 import com.example.flaskopenaiapi.model.Message;
 import com.example.flaskopenaiapi.model.OpenApiResponse;
 import com.example.flaskopenaiapi.service.ConversationService;
+import com.example.flaskopenaiapi.service.DataIngestionService;
+import com.example.flaskopenaiapi.service.VectorStoreService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,9 +22,15 @@ import java.util.Map;
 public class ApiController {
 
     private final ConversationService conversationService;
+    private final DataIngestionService dataIngestionService;
+    private final VectorStoreService vectorStoreService;
 
-    public ApiController(ConversationService conversationService) {
+    public ApiController(ConversationService conversationService,
+                         DataIngestionService dataIngestionService,
+                         VectorStoreService vectorStoreService) {
         this.conversationService = conversationService;
+        this.dataIngestionService = dataIngestionService;
+        this.vectorStoreService = vectorStoreService;
     }
 
 
@@ -61,6 +69,17 @@ public class ApiController {
 
         conversationService.askStream(sessionId, input, emitter);
         return emitter;
+    }
+
+    @PostMapping("/ingest")
+    public ResponseEntity<Map<String, Object>> ingest() {
+        dataIngestionService.ingestAll();
+        vectorStoreService.rebuildIndex();
+
+        Map<String, Object> responseBody = new HashMap<>();
+        responseBody.put("status", "success");
+        responseBody.put("message", "Data ingested and vector index rebuilt successfully.");
+        return ResponseEntity.ok(responseBody);
     }
 
     @ExceptionHandler(AuthenticationException.class)
