@@ -335,6 +335,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
             let fullText = '';
+            let currentEvent = '';
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -344,20 +345,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 const lines = buffer.split('\n');
                 buffer = lines.pop(); // Keep partial line in buffer
 
-                let currentEvent = '';
                 for (const line of lines) {
-                    const cleanLine = line.trim();
-                    if (cleanLine.startsWith('event:')) {
-                        currentEvent = cleanLine.substring(6).trim();
-                    } else if (cleanLine.startsWith('data:')) {
-                        const dataVal = cleanLine.substring(5).trim();
+                    const cleanLine = line.replace(/\r$/, '');
+                    if (cleanLine.startsWith('event: ')) {
+                        currentEvent = cleanLine.substring(7).trim();
+                    } else if (cleanLine.startsWith('data: ')) {
+                        const dataVal = cleanLine.substring(6);
                         if (currentEvent === 'delta') {
                             fullText += dataVal;
                             contentDiv.innerHTML = formatMessageContent(fullText);
                             scrollToBottom();
                         } else if (currentEvent === 'error') {
-                            showToast('Error: ' + dataVal, 'error');
-                            contentDiv.innerHTML += ` <br><span style="color:#ef4444; font-weight:500;">⚠️ Error: ${dataVal}</span>`;
+                            showToast('Error: ' + dataVal.trim(), 'error');
+                            contentDiv.innerHTML += ` <br><span style="color:#ef4444; font-weight:500;">⚠️ Error: ${dataVal.trim()}</span>`;
                             scrollToBottom();
                         }
                     }
