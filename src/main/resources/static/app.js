@@ -287,7 +287,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showTypingIndicator(true);
 
         try {
-            const response = await fetch('/ask', {
+            const response = await fetch('/ask-stream', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -298,28 +298,78 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
             });
 
-            const data = await response.json();
-            showTypingIndicator(false);
-
-            if (response.ok) {
-                // Add assistant message to UI
-                appendMessageBubble('assistant', data.response);
-                
-                // Cache conversation history locally
-                if (data.history) {
-                    localStorage.setItem(`history_${currentSessionId}`, JSON.stringify(data.history));
-                }
-            } else {
-                // Handle API error statuses
-                let errorMsg = data.error || 'Failed to get a response from AI.';
+            if (!response.ok) {
+                showTypingIndicator(false);
+                let errorMsg = 'Failed to get a response from AI.';
                 if (response.status === 401) {
                     errorMsg = 'Authentication Error: Please check your API key settings in the .env file.';
                 } else if (response.status === 429) {
                     errorMsg = 'Rate Limit Exceeded: Please check your OpenAI quota.';
+                } else {
+                    try {
+                        const data = await response.json();
+                        errorMsg = data.error || errorMsg;
+                    } catch (e) {}
                 }
                 showToast(errorMsg, 'error');
                 appendMessageBubble('assistant', `⚠️ Error: ${errorMsg}`);
+                return;
             }
+
+            showTypingIndicator(false);
+
+            // Create and append an empty assistant bubble
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble assistant';
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            bubble.innerHTML = `
+                <div class="message-meta">Assistant • ${timestamp}</div>
+                <div class="message-content"></div>
+            `;
+            messagesContainer.appendChild(bubble);
+            const contentDiv = bubble.querySelector('.message-content');
+            scrollToBottom();
+
+            // Read the stream
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+            let fullText = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep partial line in buffer
+
+                let currentEvent = '';
+                for (const line of lines) {
+                    const cleanLine = line.trim();
+                    if (cleanLine.startsWith('event:')) {
+                        currentEvent = cleanLine.substring(6).trim();
+                    } else if (cleanLine.startsWith('data:')) {
+                        const dataVal = cleanLine.substring(5).trim();
+                        if (currentEvent === 'delta') {
+                            fullText += dataVal;
+                            contentDiv.innerHTML = formatMessageContent(fullText);
+                            scrollToBottom();
+                        } else if (currentEvent === 'error') {
+                            showToast('Error: ' + dataVal, 'error');
+                            contentDiv.innerHTML += ` <br><span style="color:#ef4444; font-weight:500;">⚠️ Error: ${dataVal}</span>`;
+                            scrollToBottom();
+                        }
+                    }
+                }
+            }
+
+            // Cache conversation history locally
+            let historyCache = localStorage.getItem(`history_${currentSessionId}`);
+            let history = historyCache ? JSON.parse(historyCache) : [];
+            history.push({ "role": "user", "content": messageText });
+            history.push({ "role": "assistant", "content": fullText });
+            localStorage.setItem(`history_${currentSessionId}`, JSON.stringify(history));
 
         } catch (error) {
             showTypingIndicator(false);

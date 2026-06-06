@@ -7,8 +7,10 @@ import com.example.flaskopenaiapi.model.Message;
 import com.example.flaskopenaiapi.model.OpenApiResponse;
 import com.example.flaskopenaiapi.service.ConversationService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.HashMap;
 import java.util.List;
@@ -44,6 +46,21 @@ public class ApiController {
         responseBody.put("history", history);
 
         return ResponseEntity.ok(responseBody);
+    }
+
+    @PostMapping(value = "/ask-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter askStream(@RequestBody Map<String, String> request) {
+        SseEmitter emitter = new SseEmitter(180000L); // 3 minutes timeout
+        String sessionId = request.get("session_id");
+        String input = request.get("input");
+
+        if (sessionId == null || input == null) {
+            emitter.completeWithError(new IllegalArgumentException("Missing session_id or input"));
+            return emitter;
+        }
+
+        conversationService.askStream(sessionId, input, emitter);
+        return emitter;
     }
 
     @ExceptionHandler(AuthenticationException.class)
