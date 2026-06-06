@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chatbot - OpenAI Integration</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Background Glowing Orbs -->
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <i data-lucide="bot" class="icon-primary"></i>
+                <h2>Chat Assistant</h2>
+            </div>
+            
+            <div class="sidebar-content">
+                <div class="session-section">
+                    <h3>Session Management</h3>
+                    <div class="session-input-group">
+                        <input type="text" id="session-input" placeholder="Enter session ID...">
+                        <button id="new-session-btn" title="Create New Session">
+                            <i data-lucide="plus"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="history-section">
+                    <h3>Recent Sessions</h3>
+                    <ul id="session-list" class="session-list">
+                        <!-- Dynamic list of past sessions -->
+                    </ul>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="status-dot online"></span>
+                    <span class="status-text">OpenAI API Connected</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-area">
+            <!-- Chat Header -->
+            <header class="chat-header">
+                <div class="chat-info">
+                    <h1 id="current-session-title">Session: default</h1>
+                    <p id="current-session-subtitle">Active Conversation Session</p>
+                </div>
+                <div class="chat-actions">
+                    <button id="clear-chat-btn" class="btn-icon-text" title="Clear current session from screen">
+                        <i data-lucide="trash-2"></i>
+                        <span>Clear Screen</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Message List -->
+            <section class="messages-container" id="messages-container">
+                <!-- Welcome/Introduction Card -->
+                <div class="welcome-card" id="welcome-card">
+                    <i data-lucide="sparkles" class="welcome-icon"></i>
+                    <h2>Welcome to AI Assistant!</h2>
+                    <p>Start a conversation by typing a message below or use one of the quick prompts to get started.</p>
+                    
+                    <div class="suggestion-grid">
+                        <button class="suggestion-chip" data-prompt="What is Java Spring Boot?">
+                            <i data-lucide="help-circle"></i>
+                            <span>What is Spring Boot?</span>
+                        </button>
+                        <button class="suggestion-chip" data-prompt="Write a Python function to check for prime numbers.">
+                            <i data-lucide="code-2"></i>
+                            <span>Code a Prime checker</span>
+                        </button>
+                        <button class="suggestion-chip" data-prompt="Write a short poem about coding at night.">
+                            <i data-lucide="pen-tool"></i>
+                            <span>Write a coding poem</span>
+                        </button>
+                        <button class="suggestion-chip" data-prompt="How do I integrate APIs in Java?">
+                            <i data-lucide="network"></i>
+                            <span>Java API integration</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Messages will be injected here dynamically -->
+            </section>
+
+            <!-- Typing indicator -->
+            <div class="typing-indicator-container" id="typing-indicator">
+                <div class="typing-bubble">
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                </div>
+            </div>
+
+            <!-- Chat Input Footer -->
+            <footer class="chat-footer">
+                <form id="chat-form" class="input-form">
+                    <textarea id="chat-input" placeholder="Type your message here... (Press Shift + Enter for new line)" rows="1" required></textarea>
+                    <button type="submit" id="send-btn" title="Send Message">
+                        <i data-lucide="send"></i>
+                    </button>
+                </form>
+            </footer>
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

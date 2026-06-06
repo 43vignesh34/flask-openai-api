@@ -23,10 +23,6 @@ public class ApiController {
         this.conversationService = conversationService;
     }
 
-    @GetMapping("/")
-    public String home() {
-        return "Spring Boot is running!";
-    }
 
     @PostMapping("/ask")
     public ResponseEntity<Map<String, Object>> ask(@RequestBody Map<String, String> request) {
