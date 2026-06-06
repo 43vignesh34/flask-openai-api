@@ -1,7 +1,12 @@
 package com.example.flaskopenaiapi.service;
 
+import com.example.flaskopenaiapi.model.MatchResult;
+import com.example.flaskopenaiapi.model.Player;
+import com.example.flaskopenaiapi.repository.MatchResultRepository;
+import com.example.flaskopenaiapi.repository.PlayerRepository;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -27,6 +32,12 @@ public class VectorStoreService {
     private final RestClient restClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private List<Chunk> index = Collections.synchronizedList(new ArrayList<>());
+
+    @Autowired
+    private PlayerRepository playerRepository;
+
+    @Autowired
+    private MatchResultRepository matchResultRepository;
 
     public VectorStoreService(@Value("${OPENAI_API_KEY:}") String apiKey) {
         this.restClient = RestClient.builder()
@@ -66,38 +77,90 @@ public class VectorStoreService {
     }
 
     public synchronized void rebuildIndex() {
-        System.out.println("Rebuilding vector store index...");
-        File dataDir = new File(DATA_DIR);
-        if (!dataDir.exists() || !dataDir.isDirectory()) {
-            System.out.println("Data directory " + DATA_DIR + " does not exist. No files to index.");
-            this.index = Collections.synchronizedList(new ArrayList<>());
-            return;
-        }
-
-        // 1. Gather all chunks from all MD and CSV files in the data directory
+        System.out.println("Rebuilding vector store index from H2 database and local files...");
+        
         List<String> allNewTexts = new ArrayList<>();
         List<String> chunkSources = new ArrayList<>();
-        
-        File[] files = dataDir.listFiles((dir, name) -> name.endsWith(".md") || name.endsWith(".csv"));
-        if (files == null || files.length == 0) {
-            System.out.println("No matching files (.md or .csv) found in " + DATA_DIR);
-            this.index = Collections.synchronizedList(new ArrayList<>());
-            return;
+
+        // 1. Gather player records from H2 Database
+        try {
+            if (playerRepository != null) {
+                List<Player> players = playerRepository.findAll();
+                for (Player p : players) {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("Player Profile | Name: ").append(p.getName()).append("\n");
+                    sb.append("Team: ").append(p.getTeam() != null ? p.getTeam() : "N/A").append("\n");
+                    sb.append("Role: ").append(p.getRole() != null ? p.getRole() : "N/A").append("\n");
+                    sb.append("Valuation: ").append(p.getPriceCr() != null ? p.getPriceCr() : "0.0").append(" Cr\n");
+                    sb.append("Nationality: ").append(p.getNationality() != null ? p.getNationality() : "Indian").append("\n");
+                    sb.append("T20 Stats: Matches=").append(p.getMatches() != null ? p.getMatches() : 0)
+                      .append(", Runs=").append(p.getRuns() != null ? p.getRuns() : 0)
+                      .append(", StrikeRate=").append(p.getStrikeRate() != null ? p.getStrikeRate() : 0.0)
+                      .append(", Wickets=").append(p.getWickets() != null ? p.getWickets() : 0)
+                      .append(", EconomyRate=").append(p.getEconomyRate() != null ? p.getEconomyRate() : 0.0).append("\n");
+                    sb.append("Availability: ").append(p.getAvailabilityStatus() != null ? p.getAvailabilityStatus() : "Available").append("\n");
+                    if (p.getInjuryNotes() != null && !p.getInjuryNotes().isEmpty()) {
+                        sb.append("Status Notes: ").append(p.getInjuryNotes()).append("\n");
+                    }
+                    allNewTexts.add(sb.toString().trim());
+                    chunkSources.add("Database: players table");
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error reading players from H2 database: " + e.getMessage());
         }
 
-        for (File file : files) {
-            try {
-                List<String> fileChunks = chunkFile(file);
-                for (String chunkText : fileChunks) {
-                    allNewTexts.add(chunkText);
-                    chunkSources.add(file.getName());
+        // 2. Gather match result records from H2 Database
+        try {
+            if (matchResultRepository != null) {
+                List<MatchResult> matches = matchResultRepository.findAll();
+                for (MatchResult mr : matches) {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("Match Result | Date: ").append(mr.getDate()).append("\n");
+                    sb.append("Match: ").append(mr.getTeamA()).append(" vs ").append(mr.getTeamB()).append("\n");
+                    sb.append("Venue: ").append(mr.getVenue() != null ? mr.getVenue() : "N/A").append("\n");
+                    sb.append("Winner: ").append(mr.getWinner() != null ? mr.getWinner() : "N/A");
+                    if (mr.getMargin() != null && !mr.getMargin().isEmpty()) {
+                        sb.append(" ").append(mr.getMargin());
+                    }
+                    sb.append("\n");
+                    if (mr.getPlayerOfMatch() != null && !mr.getPlayerOfMatch().isEmpty()) {
+                        sb.append("Player of the Match: ").append(mr.getPlayerOfMatch()).append("\n");
+                    }
+                    allNewTexts.add(sb.toString().trim());
+                    chunkSources.add("Database: match_results table");
                 }
-            } catch (Exception e) {
-                System.err.println("Error reading file " + file.getName() + ": " + e.getMessage());
+            }
+        } catch (Exception e) {
+            System.err.println("Error reading match results from H2 database: " + e.getMessage());
+        }
+
+        // 3. Gather general rules and scraped news files (EXCLUDING baseline squads/stats to avoid duplication)
+        File dataDir = new File(DATA_DIR);
+        if (dataDir.exists() && dataDir.isDirectory()) {
+            File[] files = dataDir.listFiles((dir, name) -> name.endsWith("ipl_info.md") || name.endsWith("scraped_news.md") || name.endsWith("scraped_squads.md") || name.endsWith("cricsheet_recent_matches.md"));
+            if (files != null) {
+                for (File file : files) {
+                    try {
+                        List<String> fileChunks = chunkFile(file);
+                        for (String chunkText : fileChunks) {
+                            allNewTexts.add(chunkText);
+                            chunkSources.add(file.getName());
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error reading file " + file.getName() + ": " + e.getMessage());
+                    }
+                }
             }
         }
 
-        // 2. Load existing cache to check if we can reuse vectors
+        if (allNewTexts.isEmpty()) {
+            System.out.println("No database records or local files found to index.");
+            this.index = Collections.synchronizedList(new ArrayList<>());
+            return;
+        }
+
+        // 4. Load existing cache to check if we can reuse vectors
         Map<String, List<Double>> existingVectors = new HashMap<>();
         File cacheFile = new File(CACHE_FILE);
         if (cacheFile.exists()) {
@@ -113,7 +176,7 @@ public class VectorStoreService {
             }
         }
 
-        // 3. Resolve vectors for all chunks (reuse cache or request from OpenAI)
+        // 5. Resolve vectors for all chunks (reuse cache or request from OpenAI)
         List<Chunk> updatedIndex = new ArrayList<>();
         List<String> textsToEmbed = new ArrayList<>();
         List<Integer> indexesToEmbed = new ArrayList<>();
@@ -129,10 +192,8 @@ public class VectorStoreService {
                 cachedChunk.setVector(existingVectors.get(text));
                 updatedIndex.add(cachedChunk);
             } else {
-                // We'll need to fetch this embedding
                 textsToEmbed.add(text);
                 indexesToEmbed.add(updatedIndex.size());
-                // Add a placeholder chunk that will be filled in
                 Chunk placeholder = new Chunk();
                 placeholder.setText(text);
                 placeholder.setSource(source);
@@ -140,9 +201,9 @@ public class VectorStoreService {
             }
         }
 
-        // 4. Batch request new embeddings from OpenAI
+        // 6. Batch request new embeddings from OpenAI
         if (!textsToEmbed.isEmpty()) {
-            System.out.println("Generating embeddings for " + textsToEmbed.size() + " new/changed chunks...");
+            System.out.println("Generating embeddings for " + textsToEmbed.size() + " new/changed database/file chunks...");
             for (int i = 0; i < textsToEmbed.size(); i += BATCH_SIZE) {
                 int end = Math.min(i + BATCH_SIZE, textsToEmbed.size());
                 List<String> subList = textsToEmbed.subList(i, end);
@@ -159,10 +220,8 @@ public class VectorStoreService {
             }
         }
 
-        // Filter out any chunks that failed to get a vector
         updatedIndex.removeIf(c -> c.getVector() == null);
 
-        // 5. Save the updated index back to the cache file
         this.index = Collections.synchronizedList(new ArrayList<>(updatedIndex));
         saveIndexToCache();
         System.out.println("Vector index rebuilt with " + this.index.size() + " chunks.");

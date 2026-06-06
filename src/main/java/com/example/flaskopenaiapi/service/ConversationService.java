@@ -28,6 +28,9 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import com.example.flaskopenaiapi.repository.PlayerRepository;
+
 @Service
 public class ConversationService {
 
@@ -36,6 +39,9 @@ public class ConversationService {
     private final Map<String, List<Message>> conversationStore = new ConcurrentHashMap<>();
     private String systemPrompt = "";
     private final VectorStoreService vectorStoreService;
+
+    @Autowired
+    private PlayerRepository playerRepository;
 
     public ConversationService(@Value("${OPENAI_API_KEY:}") String apiKey, VectorStoreService vectorStoreService) {
         this.vectorStoreService = vectorStoreService;
@@ -75,17 +81,26 @@ public class ConversationService {
                 messagesCopy.add(new Message("system", systemPrompt));
             }
 
-            // Search vector store for relevant context based on user query
-            List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
-            if (!contextChunks.isEmpty()) {
-                StringBuilder contextBuilder = new StringBuilder();
-                contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
-                contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
-                for (VectorStoreService.ChunkScore cs : contextChunks) {
-                    contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
-                    contextBuilder.append(cs.getChunk().getText()).append("\n\n");
+            boolean dbIncomplete = (playerRepository == null || playerRepository.count() == 0);
+            if (dbIncomplete) {
+                String warning = "[CRITICAL: KNOWLEDGE BASE INCOMPLETE]\n" +
+                        "The verified database containing current IPL squads, player stats, and match results is currently empty or unavailable. " +
+                        "You must immediately and clearly state to the user: \"The IPL knowledge base is currently incomplete. Current data is unavailable.\" " +
+                        "Do not answer the question using your general model memory.";
+                messagesCopy.add(new Message("system", warning));
+            } else {
+                // Search vector store for relevant context based on user query
+                List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
+                if (!contextChunks.isEmpty()) {
+                    StringBuilder contextBuilder = new StringBuilder();
+                    contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
+                    contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
+                    for (VectorStoreService.ChunkScore cs : contextChunks) {
+                        contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
+                        contextBuilder.append(cs.getChunk().getText()).append("\n\n");
+                    }
+                    messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
                 }
-                messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
             }
 
             synchronized (history) {
@@ -140,17 +155,26 @@ public class ConversationService {
             messagesCopy.add(new Message("system", systemPrompt));
         }
 
-        // Search vector store for relevant context based on user query
-        List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
-        if (!contextChunks.isEmpty()) {
-            StringBuilder contextBuilder = new StringBuilder();
-            contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
-            contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
-            for (VectorStoreService.ChunkScore cs : contextChunks) {
-                contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
-                contextBuilder.append(cs.getChunk().getText()).append("\n\n");
+        boolean dbIncomplete = (playerRepository == null || playerRepository.count() == 0);
+        if (dbIncomplete) {
+            String warning = "[CRITICAL: KNOWLEDGE BASE INCOMPLETE]\n" +
+                    "The verified database containing current IPL squads, player stats, and match results is currently empty or unavailable. " +
+                    "You must immediately and clearly state to the user: \"The IPL knowledge base is currently incomplete. Current data is unavailable.\" " +
+                    "Do not answer the question using your general model memory.";
+            messagesCopy.add(new Message("system", warning));
+        } else {
+            // Search vector store for relevant context based on user query
+            List<VectorStoreService.ChunkScore> contextChunks = vectorStoreService.search(userInput, 5);
+            if (!contextChunks.isEmpty()) {
+                StringBuilder contextBuilder = new StringBuilder();
+                contextBuilder.append("[FACTUAL CONTEXT - CRITICAL FOR SQUADS & INJURIES]\n");
+                contextBuilder.append("Use the following verified facts to answer the user's question. Rely on this context instead of your internal memory for current squads, player lists, rules, stats, and match results:\n\n");
+                for (VectorStoreService.ChunkScore cs : contextChunks) {
+                    contextBuilder.append("--- Chunk from ").append(cs.getChunk().getSource()).append(" (Score: ").append(String.format("%.4f", cs.getScore())).append(") ---\n");
+                    contextBuilder.append(cs.getChunk().getText()).append("\n\n");
+                }
+                messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
             }
-            messagesCopy.add(new Message("system", contextBuilder.toString().trim()));
         }
 
         synchronized (history) {

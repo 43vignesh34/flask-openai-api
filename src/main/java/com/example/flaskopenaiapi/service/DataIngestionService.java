@@ -1,5 +1,9 @@
 package com.example.flaskopenaiapi.service;
 
+import com.example.flaskopenaiapi.model.MatchResult;
+import com.example.flaskopenaiapi.model.Player;
+import com.example.flaskopenaiapi.repository.MatchResultRepository;
+import com.example.flaskopenaiapi.repository.PlayerRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jsoup.Connection;
@@ -7,6 +11,8 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
@@ -30,41 +36,78 @@ public class DataIngestionService {
     
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Autowired
+    private PlayerRepository playerRepository;
+
+    @Autowired
+    private MatchResultRepository matchResultRepository;
+    
+    @Autowired
+    private VectorStoreService vectorStoreService;
+
     @PostConstruct
     public void init() {
         try {
             Files.createDirectories(Paths.get(DATA_DIR));
-            ensureFallbackData();
+            
+            // 1. Ensure baseline fallback files exist on disk
+            ensureFallbackFilesOnDisk();
+            
+            // 2. If the database is empty, populate it from the fallback files
+            if (playerRepository.count() == 0) {
+                System.out.println("H2 database is empty. Populating database from local fallback files...");
+                populateDatabaseFromFallbacks();
+
+                // Rebuild the vector store index to index the newly populated DB records
+                vectorStoreService.rebuildIndex();
+            }
         } catch (Exception e) {
-            System.err.println("Failed to initialize data directory or write fallback data: " + e.getMessage());
+            System.err.println("Failed to initialize database or write fallback data: " + e.getMessage());
         }
     }
 
+    /**
+     * Permanent scheduler: runs the ingestion pipeline once every 24 hours.
+     * Rebuilds the vector index after updating the database.
+     */
+    @Scheduled(cron = "0 0 0 * * ?") // Runs daily at midnight
+    public void scheduledIngestion() {
+        System.out.println("Triggering scheduled data ingestion...");
+        ingestAll();
+    }
+
     public synchronized void ingestAll() {
-        System.out.println("Starting full IPL data ingestion pipeline...");
+        System.out.println("Starting full database-backed IPL data ingestion pipeline...");
         
         // 1. Scrape squads from Cricbuzz
         try {
             scrapeCricbuzzSquads();
         } catch (Exception e) {
-            System.err.println("Cricbuzz squads scraping failed: " + e.getMessage() + ". Using local fallback.");
+            System.err.println("Cricbuzz squads scraping failed: " + e.getMessage() + ". Using local database cache.");
         }
 
-        // 2. Fetch news/updates from Cricbuzz news or ESPNcricinfo
+        // 2. Fetch news/updates
         try {
             scrapeCricbuzzNews();
         } catch (Exception e) {
-            System.err.println("News scraping failed: " + e.getMessage() + ". Using local fallback.");
+            System.err.println("News scraping failed: " + e.getMessage() + ". Using local database cache.");
         }
 
-        // 3. Download and parse Cricsheet matches
+        // 3. Download and parse Cricsheet matches (saves matches directly to database)
         try {
             downloadAndParseCricsheet();
         } catch (Exception e) {
-            System.err.println("Cricsheet data ingestion failed: " + e.getMessage() + ". Using local fallback.");
+            System.err.println("Cricsheet data ingestion failed: " + e.getMessage() + ". Using local database cache.");
         }
 
-        System.out.println("IPL data ingestion pipeline completed.");
+        // 4. Trigger Vector Store index rebuild from the updated database
+        try {
+            vectorStoreService.rebuildIndex();
+        } catch (Exception e) {
+            System.err.println("Failed to rebuild vector store after ingestion: " + e.getMessage());
+        }
+
+        System.out.println("IPL database-backed ingestion pipeline completed.");
     }
 
     private void scrapeCricbuzzSquads() throws Exception {
@@ -75,7 +118,6 @@ public class DataIngestionService {
                 .timeout(10000);
         Document doc = connection.get();
         
-        // Find squad links
         Elements links = doc.select("a[href*=/squads/]");
         if (links.isEmpty()) {
             throw new IOException("No squad links found on the Cricbuzz page.");
@@ -99,7 +141,6 @@ public class DataIngestionService {
                 
                 squadsMarkdown.append("## ").append(teamName).append("\n\n");
                 
-                // Get player names and details
                 Elements playerElements = squadDoc.select(".cb-col-50");
                 for (Element pe : playerElements) {
                     String playerName = pe.select("a").text().trim();
@@ -110,6 +151,16 @@ public class DataIngestionService {
                             squadsMarkdown.append(" (").append(role).append(")");
                         }
                         squadsMarkdown.append("\n");
+
+                        // Update or save Player in database
+                        Player player = playerRepository.findByName(playerName).orElse(new Player());
+                        player.setName(playerName);
+                        player.setTeam(teamName);
+                        player.setRole(role);
+                        if (player.getNationality() == null) {
+                            player.setNationality(role.toLowerCase().contains("overseas") ? "Overseas" : "Indian");
+                        }
+                        playerRepository.save(player);
                     }
                 }
                 squadsMarkdown.append("\n");
@@ -145,7 +196,7 @@ public class DataIngestionService {
                 newsMarkdown.append("### ").append(title).append("\n");
                 newsMarkdown.append("Link: [").append(link).append("](").append(link).append(")\n\n");
                 count++;
-                if (count >= 15) break; // Limit news chunks
+                if (count >= 15) break;
             }
         }
 
@@ -208,6 +259,10 @@ public class DataIngestionService {
                                 try {
                                     int year = Integer.parseInt(matchDate.substring(0, 4));
                                     if (year >= 2024) {
+                                        // 1. Save match directly to H2 Database
+                                        saveMatchToDb(root, matchDate);
+
+                                        // 2. Append to match summaries list for local markdown backup
                                         StringBuilder singleMatchSb = new StringBuilder();
                                         parseSingleMatch(root, matchDate, singleMatchSb);
                                         matchSummaries.add(new MatchSummary(matchDate, singleMatchSb.toString()));
@@ -224,10 +279,7 @@ public class DataIngestionService {
         }
 
         if (!matchSummaries.isEmpty()) {
-            // Sort matches chronologically
             matchSummaries.sort(Comparator.comparing(m -> m.date));
-            
-            // Collect the latest 15 matches (at the end of the sorted list)
             int startIdx = Math.max(0, matchSummaries.size() - 15);
             for (int i = startIdx; i < matchSummaries.size(); i++) {
                 matchesMarkdown.append(matchSummaries.get(i).content);
@@ -237,6 +289,62 @@ public class DataIngestionService {
             System.out.println("Saved " + (matchSummaries.size() - startIdx) + " recent (2024+) Cricsheet matches to " + DATA_DIR + "/cricsheet_recent_matches.md");
         } else {
             System.out.println("No recent (2024+) matches found in Cricsheet zip.");
+        }
+    }
+
+    private void saveMatchToDb(JsonNode root, String matchDate) {
+        try {
+            JsonNode info = root.get("info");
+            JsonNode teams = info.get("teams");
+            String teamA = teams.get(0).asText();
+            String teamB = teams.get(1).asText();
+            
+            String venue = info.has("venue") ? info.get("venue").asText() : "Unknown Venue";
+            String city = info.has("city") ? info.get("city").asText() : "";
+            
+            String winner = "No Result / Draw";
+            String margin = "";
+            if (info.has("outcome")) {
+                JsonNode outcome = info.get("outcome");
+                if (outcome.has("winner")) {
+                    winner = outcome.get("winner").asText();
+                    if (outcome.has("by")) {
+                        JsonNode by = outcome.get("by");
+                        if (by.has("runs")) {
+                            margin = "by " + by.get("runs").asText() + " runs";
+                        } else if (by.has("wickets")) {
+                            margin = "by " + by.get("wickets").asText() + " wickets";
+                        }
+                    }
+                } else if (outcome.has("result")) {
+                    winner = "Match tied (" + outcome.get("result").asText() + ")";
+                }
+            }
+
+            String playerOfMatch = "";
+            if (info.has("player_of_match")) {
+                JsonNode pom = info.get("player_of_match");
+                if (pom.isArray() && pom.size() > 0) {
+                    playerOfMatch = pom.get(0).asText();
+                }
+            }
+
+            String fullVenue = venue + (city.isEmpty() ? "" : ", " + city);
+            
+            MatchResult mr = new MatchResult();
+            mr.setDate(matchDate);
+            mr.setTeamA(teamA);
+            mr.setTeamB(teamB);
+            mr.setVenue(fullVenue);
+            mr.setWinner(winner);
+            mr.setMargin(margin);
+            mr.setPlayerOfMatch(playerOfMatch);
+
+            if (!matchResultRepository.existsByDateAndTeamAAndTeamB(matchDate, teamA, teamB)) {
+                matchResultRepository.save(mr);
+            }
+        } catch (Exception e) {
+            System.err.println("Error saving match from JSON to DB: " + e.getMessage());
         }
     }
 
@@ -286,7 +394,134 @@ public class DataIngestionService {
         sb.append("\n");
     }
 
-    private void ensureFallbackData() throws IOException {
+    private void populateDatabaseFromFallbacks() throws IOException {
+        // 1. Populate players stats
+        Path statsPath = Paths.get(DATA_DIR, "player_stats.csv");
+        if (Files.exists(statsPath)) {
+            String statsContent = Files.readString(statsPath, StandardCharsets.UTF_8);
+            String[] lines = statsContent.split("\n");
+            for (int i = 1; i < lines.length; i++) {
+                String line = lines[i].trim();
+                if (line.isEmpty()) continue;
+                String[] cols = line.split(",");
+                if (cols.length >= 7) {
+                    try {
+                        String name = cols[0].trim();
+                        String team = cols[1].trim();
+                        int matches = Integer.parseInt(cols[2].trim());
+                        int runs = Integer.parseInt(cols[3].trim());
+                        double strikeRate = Double.parseDouble(cols[4].trim());
+                        int wickets = Integer.parseInt(cols[5].trim());
+                        double economyRate = Double.parseDouble(cols[6].trim());
+
+                        Player player = playerRepository.findByName(name).orElse(new Player());
+                        player.setName(name);
+                        player.setTeam(team);
+                        player.setMatches(matches);
+                        player.setRuns(runs);
+                        player.setStrikeRate(strikeRate);
+                        player.setWickets(wickets);
+                        player.setEconomyRate(economyRate);
+                        playerRepository.save(player);
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        // 2. Populate player roles & price details
+        Path squadsPath = Paths.get(DATA_DIR, "squads.md");
+        if (Files.exists(squadsPath)) {
+            String squadsContent = Files.readString(squadsPath, StandardCharsets.UTF_8);
+            String[] lines = squadsContent.split("\n");
+            String currentTeam = "";
+            for (String line : lines) {
+                line = line.trim();
+                if (line.startsWith("## ")) {
+                    currentTeam = line.substring(3).trim();
+                } else if (line.startsWith("- ")) {
+                    try {
+                        int nameStart = line.indexOf("**");
+                        int nameEnd = line.indexOf("**", nameStart + 2);
+                        if (nameStart != -1 && nameEnd != -1) {
+                            String name = line.substring(nameStart + 2, nameEnd).trim();
+                            
+                            String role = "";
+                            int roleStart = line.indexOf("(", nameEnd);
+                            int roleEnd = line.indexOf(")", roleStart);
+                            if (roleStart != -1 && roleEnd != -1) {
+                                role = line.substring(roleStart + 1, roleEnd).trim();
+                            }
+                            
+                            double price = 0.0;
+                            int priceIndex = line.indexOf("-", roleEnd != -1 ? roleEnd : nameEnd);
+                            if (priceIndex != -1) {
+                                String priceStr = line.substring(priceIndex + 1).trim();
+                                int crIndex = priceStr.toLowerCase().indexOf("cr");
+                                if (crIndex != -1) {
+                                    String cleanPriceStr = priceStr.substring(0, crIndex).trim();
+                                    if (cleanPriceStr.contains("(")) {
+                                        cleanPriceStr = cleanPriceStr.substring(0, cleanPriceStr.indexOf("(")).trim();
+                                    }
+                                    price = Double.parseDouble(cleanPriceStr);
+                                }
+                            }
+                            
+                            String nationality = "Indian";
+                            if (role.toLowerCase().contains("overseas")) {
+                                nationality = "Overseas";
+                                int slash = role.indexOf("/");
+                                if (slash != -1) {
+                                    nationality = role.substring(slash + 1).trim();
+                                }
+                            }
+
+                            Player player = playerRepository.findByName(name).orElse(new Player());
+                            player.setName(name);
+                            player.setTeam(currentTeam);
+                            player.setRole(role);
+                            player.setPriceCr(price);
+                            player.setNationality(nationality);
+                            player.setAvailabilityStatus("Available");
+                            playerRepository.save(player);
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        // 3. Populate baseline match results (mock standings/reconstructed details)
+        Path infoPath = Paths.get(DATA_DIR, "ipl_info.md");
+        if (Files.exists(infoPath)) {
+            // Write a couple of key historic matches directly into MatchResult table
+            MatchResult mr1 = new MatchResult();
+            mr1.setDate("2026-05-31");
+            mr1.setTeamA("Gujarat Titans");
+            mr1.setTeamB("Royal Challengers Bengaluru");
+            mr1.setVenue("Narendra Modi Stadium, Ahmedabad");
+            mr1.setWinner("Royal Challengers Bengaluru");
+            mr1.setMargin("by 5 wickets");
+            mr1.setPlayerOfMatch("V Kohli");
+            
+            MatchResult mr2 = new MatchResult();
+            mr2.setDate("2024-05-26");
+            mr2.setTeamA("Sunrisers Hyderabad");
+            mr2.setTeamB("Kolkata Knight Riders");
+            mr2.setVenue("MA Chidambaram Stadium, Chennai");
+            mr2.setWinner("Kolkata Knight Riders");
+            mr2.setMargin("by 8 wickets");
+            mr2.setPlayerOfMatch("Mitchell Starc");
+
+            if (!matchResultRepository.existsByDateAndTeamAAndTeamB(mr1.getDate(), mr1.getTeamA(), mr1.getTeamB())) {
+                matchResultRepository.save(mr1);
+            }
+            if (!matchResultRepository.existsByDateAndTeamAAndTeamB(mr2.getDate(), mr2.getTeamA(), mr2.getTeamB())) {
+                matchResultRepository.save(mr2);
+            }
+        }
+        System.out.println("Successfully populated " + playerRepository.count() + " players and " + matchResultRepository.count() + " matches into DB.");
+    }
+
+    private void ensureFallbackFilesOnDisk() throws IOException {
         Path squadsPath = Paths.get(DATA_DIR, "squads.md");
         if (!Files.exists(squadsPath)) {
             String squadsFallback = "# IPL Squads (2024 - 2026 Baseline & Key Signings)\n\n" +
@@ -366,7 +601,6 @@ public class DataIngestionService {
                     "- **Tristan Stubbs** (Wicketkeeper-Batsman, Overseas/South Africa) - 0.5 Cr\n" +
                     "- **Khaleel Ahmed** (Bowler, Indian) - 5.25 Cr\n";
             Files.writeString(squadsPath, squadsFallback, StandardCharsets.UTF_8);
-            System.out.println("Wrote fallback squads data to " + squadsPath);
         }
 
         Path statsPath = Paths.get(DATA_DIR, "player_stats.csv");
@@ -389,7 +623,6 @@ public class DataIngestionService {
                     "Jasprit Bumrah,MI,13,0,0.0,20,6.5\n" +
                     "Harshal Patel,PBKS,14,0,0.0,24,9.7\n";
             Files.writeString(statsPath, statsFallback, StandardCharsets.UTF_8);
-            System.out.println("Wrote fallback player stats data to " + statsPath);
         }
 
         Path iplInfoPath = Paths.get(DATA_DIR, "ipl_info.md");
@@ -420,8 +653,6 @@ public class DataIngestionService {
                     "- **Double DRS Review Rule**: Players can review wide ball and waist-high no-ball decisions using the Decision Review System (DRS).\n" +
                     "- **Two Bouncers per Over Rule**: Bowlers are allowed to bowl up to two short-pitched deliveries (bouncers) per over.\n";
             Files.writeString(iplInfoPath, infoFallback, StandardCharsets.UTF_8);
-            System.out.println("Wrote fallback IPL info data to " + iplInfoPath);
         }
     }
 }
-
