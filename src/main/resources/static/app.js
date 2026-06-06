@@ -347,10 +347,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 for (const line of lines) {
                     const cleanLine = line.replace(/\r$/, '');
-                    if (cleanLine.startsWith('event: ')) {
-                        currentEvent = cleanLine.substring(7).trim();
-                    } else if (cleanLine.startsWith('data: ')) {
-                        const dataVal = cleanLine.substring(6);
+                    if (cleanLine.startsWith('event:')) {
+                        currentEvent = cleanLine.substring(6).trim();
+                    } else if (cleanLine.startsWith('data:')) {
+                        const dataVal = cleanLine.substring(5);
                         if (currentEvent === 'delta') {
                             fullText += dataVal;
                             contentDiv.innerHTML = formatMessageContent(fullText);
