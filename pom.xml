@@ -10,9 +10,9 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.example</groupId>
-    <artifactId>flask-openai-api</artifactId>
+    <artifactId>springboot-openai-api</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>flask-openai-api</name>
+    <name>springboot-openai-api</name>
     <description>Spring Boot migration of Flask OpenAI API</description>
 
     <properties>
