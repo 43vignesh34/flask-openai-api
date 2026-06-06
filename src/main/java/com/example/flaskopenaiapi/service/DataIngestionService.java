@@ -153,6 +153,16 @@ public class DataIngestionService {
         System.out.println("Saved scraped news to " + DATA_DIR + "/scraped_news.md");
     }
 
+    private static class MatchSummary {
+        String date;
+        String content;
+
+        public MatchSummary(String date, String content) {
+            this.date = date;
+            this.content = content;
+        }
+    }
+
     private void downloadAndParseCricsheet() throws Exception {
         System.out.println("Downloading Cricsheet ZIP from: " + CRICSHEET_ZIP_URL);
         
@@ -168,7 +178,7 @@ public class DataIngestionService {
         }
 
         StringBuilder matchesMarkdown = new StringBuilder("# Cricsheet Recent IPL Matches\n\n");
-        int parsedCount = 0;
+        List<MatchSummary> matchSummaries = new ArrayList<>();
 
         try (InputStream is = conn.getInputStream();
              ZipInputStream zis = new ZipInputStream(is)) {
@@ -176,7 +186,6 @@ public class DataIngestionService {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 if (entry.getName().endsWith(".json")) {
-                    // Read file content without saving it to disk
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
                     byte[] buffer = new byte[4096];
                     int len;
@@ -195,17 +204,18 @@ public class DataIngestionService {
                                 matchDate = datesNode.get(0).asText();
                             }
 
-                            // Filter: only parse recent matches from 2024
-                            if (matchDate.startsWith("2024")) {
-                                parseSingleMatch(root, matchDate, matchesMarkdown);
-                                parsedCount++;
-                                if (parsedCount >= 10) { // Limit to latest 10 matches to keep index small and fast
-                                    break;
-                                }
+                            if (matchDate.length() >= 4) {
+                                try {
+                                    int year = Integer.parseInt(matchDate.substring(0, 4));
+                                    if (year >= 2024) {
+                                        StringBuilder singleMatchSb = new StringBuilder();
+                                        parseSingleMatch(root, matchDate, singleMatchSb);
+                                        matchSummaries.add(new MatchSummary(matchDate, singleMatchSb.toString()));
+                                    }
+                                } catch (NumberFormatException ignored) {}
                             }
                         }
                     } catch (Exception parseException) {
-                        // Ignore parse exceptions for specific files and proceed
                         System.err.println("Failed to parse JSON file " + entry.getName() + ": " + parseException.getMessage());
                     }
                 }
@@ -213,11 +223,20 @@ public class DataIngestionService {
             }
         }
 
-        if (parsedCount > 0) {
+        if (!matchSummaries.isEmpty()) {
+            // Sort matches chronologically
+            matchSummaries.sort(Comparator.comparing(m -> m.date));
+            
+            // Collect the latest 15 matches (at the end of the sorted list)
+            int startIdx = Math.max(0, matchSummaries.size() - 15);
+            for (int i = startIdx; i < matchSummaries.size(); i++) {
+                matchesMarkdown.append(matchSummaries.get(i).content);
+            }
+
             Files.writeString(Paths.get(DATA_DIR, "cricsheet_recent_matches.md"), matchesMarkdown.toString(), StandardCharsets.UTF_8);
-            System.out.println("Saved " + parsedCount + " Cricsheet matches to " + DATA_DIR + "/cricsheet_recent_matches.md");
+            System.out.println("Saved " + (matchSummaries.size() - startIdx) + " recent (2024+) Cricsheet matches to " + DATA_DIR + "/cricsheet_recent_matches.md");
         } else {
-            System.out.println("No recent 2024 matches found in Cricsheet zip.");
+            System.out.println("No recent (2024+) matches found in Cricsheet zip.");
         }
     }
 
@@ -270,7 +289,30 @@ public class DataIngestionService {
     private void ensureFallbackData() throws IOException {
         Path squadsPath = Paths.get(DATA_DIR, "squads.md");
         if (!Files.exists(squadsPath)) {
-            String squadsFallback = "# IPL 2024 Squads (Official & Retention Baseline)\n\n" +
+            String squadsFallback = "# IPL Squads (2024 - 2026 Baseline & Key Signings)\n\n" +
+                    "## Lucknow Super Giants (LSG)\n" +
+                    "- **Rishabh Pant** (Captain, Wicketkeeper-Batsman, Indian) - 27 Cr (Record 2025 Signing)\n" +
+                    "- **KL Rahul** (Batsman, Indian) - 17 Cr\n" +
+                    "- **Nicholas Pooran** (Wicketkeeper-Batsman, Overseas/West Indies) - 16 Cr\n" +
+                    "- **Marcus Stoinis** (All-rounder, Overseas/Australia) - 9.2 Cr\n" +
+                    "- **Mayank Yadav** (Bowler, Indian) - 0.2 Cr\n" +
+                    "- **Ravi Bishnoi** (Bowler, Indian) - 4 Cr\n" +
+                    "- **Ayush Badoni** (Batsman, Indian) - 0.2 Cr\n\n" +
+                    "## Punjab Kings (PBKS)\n" +
+                    "- **Shreyas Iyer** (Captain, Batsman, Indian) - 26.75 Cr (2025 Mega Auction Signing)\n" +
+                    "- **Sam Curran** (All-rounder, Overseas/England) - 18.5 Cr\n" +
+                    "- **Liam Livingstone** (All-rounder, Overseas/England) - 11.5 Cr\n" +
+                    "- **Shashank Singh** (Batsman, Indian) - 0.2 Cr\n" +
+                    "- **Harshal Patel** (Bowler, Indian) - 11.75 Cr\n" +
+                    "- **Arshdeep Singh** (Bowler, Indian) - 4 Cr\n\n" +
+                    "## Kolkata Knight Riders (KKR)\n" +
+                    "- **Venkatesh Iyer** (All-rounder, Indian) - 23.75 Cr (2025 Mega Auction Signing)\n" +
+                    "- **Sunil Narine** (All-rounder, Overseas/West Indies) - 6 Cr\n" +
+                    "- **Andre Russell** (All-rounder, Overseas/West Indies) - 12 Cr\n" +
+                    "- **Rinku Singh** (Batsman, Indian) - 0.55 Cr\n" +
+                    "- **Phil Salt** (Wicketkeeper-Batsman, Overseas/England) - 1.5 Cr\n" +
+                    "- **Harshit Rana** (Bowler, Indian) - 0.2 Cr\n" +
+                    "- **Varun Chakravarthy** (Bowler, Indian) - 8 Cr\n\n" +
                     "## Chennai Super Kings (CSK)\n" +
                     "- **Ruturaj Gaikwad** (Captain, Batsman) - 6 Cr\n" +
                     "- **MS Dhoni** (Wicketkeeper-Batsman, Indian) - 12 Cr\n" +
@@ -279,112 +321,50 @@ public class DataIngestionService {
                     "- **Shivam Dube** (All-rounder, Indian) - 4 Cr\n" +
                     "- **Rachin Ravindra** (All-rounder, Overseas/New Zealand) - 1.8 Cr\n" +
                     "- **Daryl Mitchell** (All-rounder, Overseas/New Zealand) - 14 Cr\n" +
-                    "- **Sameer Rizvi** (Batsman, Indian) - 8.4 Cr\n" +
-                    "- **Shardul Thakur** (Bowler/All-rounder, Indian) - 4 Cr\n" +
-                    "- **Deepak Chahar** (Bowler, Indian) - 14 Cr\n" +
-                    "- **Mustafizur Rahman** (Bowler, Overseas/Bangladesh) - 2 Cr\n" +
-                    "- **Tushar Deshpande** (Bowler, Indian) - 0.2 Cr\n\n" +
+                    "- **Deepak Chahar** (Bowler, Indian) - 14 Cr\n\n" +
                     "## Mumbai Indians (MI)\n" +
-                    "- **Hardik Pandya** (Captain, All-rounder, Indian) - 15 Cr (Traded from GT)\n" +
+                    "- **Hardik Pandya** (Captain, All-rounder, Indian) - 15 Cr\n" +
                     "- **Rohit Sharma** (Batsman, Indian) - 16 Cr\n" +
                     "- **Jasprit Bumrah** (Bowler, Indian) - 12 Cr\n" +
-                    "- **Suryakumar Yadav** (Batsman, Indian) - 8 Cr\n" +
+                    "- **Suryakumar Yadav** (Batsman, Indian) - 8 Cr (2025 MVP)\n" +
                     "- **Ishan Kishan** (Wicketkeeper-Batsman, Indian) - 15.25 Cr\n" +
-                    "- **Tim David** (Batsman, Overseas/Australia) - 8.25 Cr\n" +
-                    "- **Gerald Coetzee** (Bowler, Overseas/South Africa) - 5 Cr\n" +
-                    "- **Dilshan Madushanka** (Bowler, Overseas/Sri Lanka) - 4.6 Cr\n" +
-                    "- **Nuwan Thushara** (Bowler, Overseas/Sri Lanka) - 4.8 Cr\n" +
-                    "- **Piyush Chawla** (Bowler, Indian) - 0.5 Cr\n" +
                     "- **Tilak Varma** (Batsman, Indian) - 1.7 Cr\n\n" +
                     "## Royal Challengers Bengaluru (RCB)\n" +
                     "- **Faf du Plessis** (Captain, Batsman, Overseas/South Africa) - 7 Cr\n" +
                     "- **Virat Kohli** (Batsman, Indian) - 15 Cr\n" +
                     "- **Glenn Maxwell** (All-rounder, Overseas/Australia) - 11 Cr\n" +
-                    "- **Cameron Green** (All-rounder, Overseas/Australia) - 17.5 Cr (Traded from MI)\n" +
-                    "- **Dinesh Karthik** (Wicketkeeper-Batsman, Indian) - 5.5 Cr\n" +
+                    "- **Cameron Green** (All-rounder, Overseas/Australia) - 17.5 Cr\n" +
                     "- **Rajat Patidar** (Batsman, Indian) - 0.2 Cr\n" +
                     "- **Mohammed Siraj** (Bowler, Indian) - 7 Cr\n" +
-                    "- **Alzarri Joseph** (Bowler, Overseas/West Indies) - 11.5 Cr\n" +
-                    "- **Yash Dayal** (Bowler, Indian) - 5 Cr\n" +
-                    "- **Lockie Ferguson** (Bowler, Overseas/New Zealand) - 2 Cr\n" +
-                    "- **Karn Sharma** (Bowler, Indian) - 0.5 Cr\n\n" +
-                    "## Kolkata Knight Riders (KKR)\n" +
-                    "- **Shreyas Iyer** (Captain, Batsman, Indian) - 12.25 Cr\n" +
-                    "- **Mitchell Starc** (Bowler, Overseas/Australia) - 24.75 Cr (Record Auction Bid)\n" +
-                    "- **Sunil Narine** (All-rounder, Overseas/West Indies) - 6 Cr\n" +
-                    "- **Andre Russell** (All-rounder, Overseas/West Indies) - 12 Cr\n" +
-                    "- **Rinku Singh** (Batsman, Indian) - 0.55 Cr\n" +
-                    "- **Phil Salt** (Wicketkeeper-Batsman, Overseas/England) - 1.5 Cr (Injury replacement for Jason Roy)\n" +
-                    "- **Varun Chakravarthy** (Bowler, Indian) - 8 Cr\n" +
-                    "- **Venkatesh Iyer** (All-rounder, Indian) - 8 Cr\n" +
-                    "- **Harshit Rana** (Bowler, Indian) - 0.2 Cr\n" +
-                    "- **Ramandeep Singh** (All-rounder, Indian) - 0.2 Cr\n\n" +
-                    "## Sunrisers Hyderabad (SRH)\n" +
-                    "- **Pat Cummins** (Captain, Bowler, Overseas/Australia) - 20.5 Cr\n" +
-                    "- **Travis Head** (Batsman, Overseas/Australia) - 6.8 Cr\n" +
-                    "- **Abhishek Sharma** (Batsman/All-rounder, Indian) - 6.5 Cr\n" +
-                    "- **Heinrich Klaasen** (Wicketkeeper-Batsman, Overseas/South Africa) - 5.25 Cr\n" +
-                    "- **Aiden Markram** (Batsman, Overseas/South Africa) - 2.6 Cr\n" +
-                    "- **Bhuvneshwar Kumar** (Bowler, Indian) - 4.2 Cr\n" +
-                    "- **T. Natarajan** (Bowler, Indian) - 4 Cr\n" +
-                    "- **Nitish Kumar Reddy** (All-rounder, Indian) - 0.2 Cr\n" +
-                    "- **Shahbaz Ahmed** (All-rounder, Indian) - 2.4 Cr\n\n" +
+                    "- **Yash Dayal** (Bowler, Indian) - 5 Cr\n\n" +
                     "## Rajasthan Royals (RR)\n" +
                     "- **Sanju Samson** (Captain, Wicketkeeper-Batsman, Indian) - 14 Cr\n" +
                     "- **Yashasvi Jaiswal** (Batsman, Indian) - 4 Cr\n" +
                     "- **Jos Buttler** (Batsman, Overseas/England) - 10 Cr\n" +
                     "- **Riyan Parag** (Batsman/All-rounder, Indian) - 3.8 Cr\n" +
-                    "- **Shimron Hetmyer** (Batsman, Overseas/West Indies) - 8.5 Cr\n" +
-                    "- **Dhruv Jurel** (Wicketkeeper-Batsman, Indian) - 0.2 Cr\n" +
-                    "- **Ravichandran Ashwin** (All-rounder, Indian) - 5 Cr\n" +
                     "- **Yuzvendra Chahal** (Bowler, Indian) - 6.5 Cr\n" +
                     "- **Trent Boult** (Bowler, Overseas/New Zealand) - 8 Cr\n" +
-                    "- **Avesh Khan** (Bowler, Indian) - 10 Cr\n" +
-                    "- **Sandeep Sharma** (Bowler, Indian) - 0.5 Cr\n\n" +
-                    "## Delhi Capitals (DC)\n" +
-                    "- **Rishabh Pant** (Captain, Wicketkeeper-Batsman, Indian) - 16 Cr\n" +
-                    "- **David Warner** (Batsman, Overseas/Australia) - 6.25 Cr\n" +
-                    "- **Axar Patel** (All-rounder, Indian) - 9 Cr\n" +
-                    "- **Kuldeep Yadav** (Bowler, Indian) - 2 Cr\n" +
-                    "- **Jake Fraser-McGurk** (Batsman, Overseas/Australia) - 0.5 Cr (Injury replacement for Lungi Ngidi)\n" +
-                    "- **Tristan Stubbs** (Wicketkeeper-Batsman, Overseas/South Africa) - 0.5 Cr\n" +
-                    "- **Khaleel Ahmed** (Bowler, Indian) - 5.25 Cr\n" +
-                    "- **Mukesh Kumar** (Bowler, Indian) - 5.5 Cr\n" +
-                    "- **Abishek Porel** (Wicketkeeper-Batsman, Indian) - 0.2 Cr\n\n" +
+                    "- **Vaibhav Sooryavanshi** (Batsman, Indian) - 1.1 Cr (2026 Orange Cap Winner)\n\n" +
+                    "## Sunrisers Hyderabad (SRH)\n" +
+                    "- **Pat Cummins** (Captain, Bowler, Overseas/Australia) - 20.5 Cr\n" +
+                    "- **Travis Head** (Batsman, Overseas/Australia) - 6.8 Cr\n" +
+                    "- **Abhishek Sharma** (Batsman/All-rounder, Indian) - 6.5 Cr\n" +
+                    "- **Heinrich Klaasen** (Wicketkeeper-Batsman, Overseas/South Africa) - 5.25 Cr\n" +
+                    "- **Bhuvneshwar Kumar** (Bowler, Indian) - 4.2 Cr\n" +
+                    "- **T. Natarajan** (Bowler, Indian) - 4 Cr\n\n" +
                     "## Gujarat Titans (GT)\n" +
                     "- **Shubman Gill** (Captain, Batsman, Indian) - 8 Cr\n" +
                     "- **Rashid Khan** (All-rounder, Overseas/Afghanistan) - 15 Cr\n" +
-                    "- **Sai Sudharsan** (Batsman, Indian) - 0.2 Cr\n" +
-                    "- **David Miller** (Batsman, Overseas/South Africa) - 3 Cr\n" +
-                    "- **Rahul Tewatia** (All-rounder, Indian) - 9 Cr\n" +
-                    "- **Mohit Sharma** (Bowler, Indian) - 6.25 Cr\n" +
-                    "- **Azmatullah Omarzai** (All-rounder, Overseas/Afghanistan) - 0.5 Cr\n" +
-                    "- **Umesh Yadav** (Bowler, Indian) - 5.8 Cr\n" +
-                    "- **Spencer Johnson** (Bowler, Overseas/Australia) - 10 Cr\n" +
-                    "- **Shahrukh Khan** (All-rounder, Indian) - 7.4 Cr\n\n" +
-                    "## Lucknow Super Giants (LSG)\n" +
-                    "- **KL Rahul** (Captain, Batsman, Indian) - 17 Cr\n" +
-                    "- **Nicholas Pooran** (Wicketkeeper-Batsman, Overseas/West Indies) - 16 Cr\n" +
-                    "- **Quinton de Kock** (Wicketkeeper-Batsman, Overseas/South Africa) - 6.75 Cr\n" +
-                    "- **Marcus Stoinis** (All-rounder, Overseas/Australia) - 9.2 Cr\n" +
-                    "- **Ayush Badoni** (Batsman, Indian) - 0.2 Cr\n" +
-                    "- **Krunal Pandya** (All-rounder, Indian) - 8.25 Cr\n" +
-                    "- **Ravi Bishnoi** (Bowler, Indian) - 4 Cr\n" +
-                    "- **Mayank Yadav** (Bowler, Indian) - 0.2 Cr (Sensational pace sensation)\n" +
-                    "- **Naveen-ul-Haq** (Bowler, Overseas/Afghanistan) - 0.5 Cr\n" +
-                    "- **Devdutt Padikkal** (Batsman, Indian) - 7.75 Cr\n\n" +
-                    "## Punjab Kings (PBKS)\n" +
-                    "- **Shikhar Dhawan** (Captain, Batsman, Indian) - 8.25 Cr\n" +
-                    "- **Sam Curran** (All-rounder, Overseas/England) - 18.5 Cr\n" +
-                    "- **Liam Livingstone** (All-rounder, Overseas/England) - 11.5 Cr\n" +
-                    "- **Jitesh Sharma** (Wicketkeeper-Batsman, Indian) - 0.2 Cr\n" +
-                    "- **Jonny Bairstow** (Batsman, Overseas/England) - 6.75 Cr\n" +
-                    "- **Prabhsimran Singh** (Batsman, Indian) - 0.6 Cr\n" +
-                    "- **Shashank Singh** (Batsman, Indian) - 0.2 Cr (Unintentional buy turned superstar)\n" +
-                    "- **Ashutosh Sharma** (Batsman, Indian) - 0.2 Cr\n" +
-                    "- **Harshal Patel** (Bowler, Indian) - 11.75 Cr\n" +
-                    "- **Kagiso Rabada** (Bowler, Overseas/South Africa) - 9.25 Cr\n" +
-                    "- **Arshdeep Singh** (Bowler, Indian) - 4 Cr\n";
+                    "- **Sai Sudharsan** (Batsman, Indian) - 0.2 Cr (2025 Orange Cap Winner)\n" +
+                    "- **Kagiso Rabada** (Bowler, Overseas/South Africa) - 9.25 Cr (2026 Purple Cap Winner)\n" +
+                    "- **Prasidh Krishna** (Bowler, Indian) - 8 Cr (2025 Purple Cap Winner)\n" +
+                    "- **David Miller** (Batsman, Overseas/South Africa) - 3 Cr\n\n" +
+                    "## Delhi Capitals (DC)\n" +
+                    "- **Axar Patel** (Captain, All-rounder, Indian) - 9 Cr\n" +
+                    "- **Kuldeep Yadav** (Bowler, Indian) - 2 Cr\n" +
+                    "- **Jake Fraser-McGurk** (Batsman, Overseas/Australia) - 0.5 Cr\n" +
+                    "- **Tristan Stubbs** (Wicketkeeper-Batsman, Overseas/South Africa) - 0.5 Cr\n" +
+                    "- **Khaleel Ahmed** (Bowler, Indian) - 5.25 Cr\n";
             Files.writeString(squadsPath, squadsFallback, StandardCharsets.UTF_8);
             System.out.println("Wrote fallback squads data to " + squadsPath);
         }
@@ -392,44 +372,56 @@ public class DataIngestionService {
         Path statsPath = Paths.get(DATA_DIR, "player_stats.csv");
         if (!Files.exists(statsPath)) {
             String statsFallback = "PlayerName,Team,Matches,Runs,StrikeRate,Wickets,EconomyRate\n" +
+                    "Vaibhav Sooryavanshi,RR,16,776,164.2,0,0.0\n" +
+                    "Sai Sudharsan,GT,16,759,145.8,0,0.0\n" +
                     "Virat Kohli,RCB,15,741,154.7,0,0.0\n" +
+                    "Kagiso Rabada,GT,17,0,0.0,29,7.4\n" +
+                    "Prasidh Krishna,GT,15,0,0.0,25,8.2\n" +
                     "Ruturaj Gaikwad,CSK,14,583,141.2,0,0.0\n" +
                     "Travis Head,SRH,15,567,191.6,0,0.0\n" +
                     "Abhishek Sharma,SRH,16,484,204.2,2,10.2\n" +
                     "Heinrich Klaasen,SRH,16,479,171.1,0,0.0\n" +
+                    "Suryakumar Yadav,MI,14,512,166.4,0,0.0\n" +
                     "Sanju Samson,RR,16,531,153.5,0,0.0\n" +
                     "Riyan Parag,RR,16,573,149.2,0,0.0\n" +
                     "Sunil Narine,KKR,15,488,180.7,17,6.7\n" +
                     "Andre Russell,KKR,15,222,185.0,19,8.6\n" +
-                    "Mitchell Starc,KKR,14,0,0.0,17,10.6\n" +
                     "Jasprit Bumrah,MI,13,0,0.0,20,6.5\n" +
-                    "Harshal Patel,PBKS,14,0,0.0,24,9.7\n" +
-                    "Varun Chakravarthy,KKR,15,0,0.0,21,8.0\n" +
-                    "Yuzvendra Chahal,RR,16,0,0.0,20,9.4\n" +
-                    "Kuldeep Yadav,DC,11,0,0.0,16,8.7\n" +
-                    "Mayank Yadav,LSG,4,0,0.0,7,7.0\n";
+                    "Harshal Patel,PBKS,14,0,0.0,24,9.7\n";
             Files.writeString(statsPath, statsFallback, StandardCharsets.UTF_8);
             System.out.println("Wrote fallback player stats data to " + statsPath);
         }
 
         Path iplInfoPath = Paths.get(DATA_DIR, "ipl_info.md");
         if (!Files.exists(iplInfoPath)) {
-            String infoFallback = "# IPL Tournament General Information & Rules\n\n" +
-                    "## IPL 2024 Final Standings\n" +
-                    "- **Champions**: Kolkata Knight Riders (KKR) won the IPL 2024 final at Chennai on May 26, 2024, defeating Sunrisers Hyderabad (SRH) by 8 wickets. SRH was bowled out for 113, and KKR chased it down in 10.3 overs.\n" +
+            String infoFallback = "# IPL Tournament General Information & Season Summaries\n\n" +
+                    "## IPL 2026 Season Standings & Records\n" +
+                    "- **Champions**: Royal Challengers Bengaluru (RCB) won their second consecutive title, defeating Gujarat Titans (GT) by 5 wickets in the final on May 31, 2026, at the Narendra Modi Stadium in Ahmedabad.\n" +
+                    "- **Runner-up**: Gujarat Titans (GT)\n" +
+                    "- **Orange Cap Winner**: Vaibhav Sooryavanshi (RR) - 776 runs in 16 matches.\n" +
+                    "- **Purple Cap Winner**: Kagiso Rabada (GT) - 29 wickets in 17 matches.\n\n" +
+                    "## IPL 2025 Season Standings & Records\n" +
+                    "- **Champions**: Royal Challengers Bengaluru (RCB) won their maiden IPL title, defeating Punjab Kings (PBKS) in the final.\n" +
+                    "- **Runner-up**: Punjab Kings (PBKS)\n" +
+                    "- **Orange Cap Winner**: Sai Sudharsan (GT) - 759 runs in 16 matches.\n" +
+                    "- **Purple Cap Winner**: Prasidh Krishna (GT) - 25 wickets in 15 matches.\n" +
+                    "- **Most Valuable Player (MVP)**: Suryakumar Yadav (MI).\n\n" +
+                    "## IPL 2024 Season Standings & Records\n" +
+                    "- **Champions**: Kolkata Knight Riders (KKR) won the IPL 2024 final at Chennai on May 26, 2024, defeating Sunrisers Hyderabad (SRH) by 8 wickets.\n" +
                     "- **Runner-up**: Sunrisers Hyderabad (SRH)\n" +
                     "- **Orange Cap Winner**: Virat Kohli (RCB) - 741 runs in 15 matches.\n" +
                     "- **Purple Cap Winner**: Harshal Patel (PBKS) - 24 wickets in 14 matches.\n" +
-                    "- **Most Valuable Player (MVP)**: Sunil Narine (KKR) - 488 runs and 17 wickets.\n\n" +
+                    "- **Most Valuable Player (MVP)**: Sunil Narine (KKR).\n\n" +
                     "## IPL Core Roster & Auction Rules\n" +
                     "- **Squad size limit**: Minimum of 18 players, maximum of 25 players.\n" +
                     "- **Overseas player limit**: Maximum of 8 overseas players in the squad.\n" +
-                    "- **Playing XI rule**: Maximum of 4 overseas players can be included in the starting playing XI. However, if a team starts with fewer than 4 overseas players, they can substitute in an overseas player as an Impact Player as long as the total overseas count in the match never exceeds 4.\n" +
+                    "- **Playing XI rule**: Maximum of 4 overseas players can be included in the starting playing XI. If a team starts with fewer than 4 overseas players, they can substitute in an overseas player as an Impact Player as long as the total overseas count in the match never exceeds 4.\n" +
                     "- **Impact Player Rule**: Teams name 5 substitutes at the toss. One of these substitutes can be introduced as an 'Impact Player' at any stage of the match (at the start of an innings, when a wicket falls, or at the end of an over). The player being substituted out cannot participate further in the match.\n" +
                     "- **Double DRS Review Rule**: Players can review wide ball and waist-high no-ball decisions using the Decision Review System (DRS).\n" +
-                    "- **Two Bouncers per Over Rule**: Bowlers are allowed to bowl up to two short-pitched deliveries (bouncers) per over. This provides bowlers with additional tactical tools to counter aggressive batsmen.\n";
+                    "- **Two Bouncers per Over Rule**: Bowlers are allowed to bowl up to two short-pitched deliveries (bouncers) per over.\n";
             Files.writeString(iplInfoPath, infoFallback, StandardCharsets.UTF_8);
             System.out.println("Wrote fallback IPL info data to " + iplInfoPath);
         }
     }
 }
+
